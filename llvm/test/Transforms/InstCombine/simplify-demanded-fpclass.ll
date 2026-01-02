@@ -1340,3 +1340,72 @@ define nofpclass(ninf) float @ret_nofpclass_ninf__maxnum_pinf(i1 %cond, float %x
   %max = call float @llvm.maximumnum.f32(float %x, float 0x7FF0000000000000)
   ret float %max
 }
+
+declare <2 x float> @llvm.copysign.v2f32(<2 x float>, <2 x float>)
+declare <2 x float> @llvm.fabs.v2f32(<2 x float>)
+declare <2 x float> @extern_vec()
+declare <2 x float> @extern_vec_func(<2 x float>)
+
+; Expect fold to fabs(x)
+define nofpclass(nan ninf nnorm nsub nzero) <2 x float> @vec_copysign_fold_to_fabs(<2 x float> %x, <2 x float> %s) {
+; CHECK-LABEL: define nofpclass(nan ninf nzero nsub nnorm) <2 x float> @vec_copysign_fold_to_fabs
+; CHECK-SAME: (<2 x float> [[X:%.*]], <2 x float> [[S:%.*]]) {
+; CHECK-NEXT:    [[F:%.*]] = call <2 x float> @llvm.fabs.v2f32(<2 x float> [[X]])
+; CHECK-NEXT:    ret <2 x float> [[F]]
+;
+  %c = call <2 x float> @llvm.copysign.v2f32(<2 x float> %x, <2 x float> %s)
+  ret <2 x float> %c
+}
+
+; Expect call preserved, value returned unchanged
+define nofpclass(snan) <2 x float> @vec_call_only_nan() {
+; CHECK-LABEL: define nofpclass(snan) <2 x float> @vec_call_only_nan
+; CHECK-NEXT:    [[V:%.*]] = call nofpclass(inf zero sub norm) <2 x float> @extern_vec()
+; CHECK-NEXT:    ret <2 x float> [[V]]
+;
+  %v = call nofpclass(inf norm zero sub) <2 x float> @extern_vec()
+  ret <2 x float> %v
+}
+
+; Expect select folded to %y
+define nofpclass(inf) <2 x float> @vec_select_call_only_inf(<2 x i1> %c, <2 x float> %y) {
+; CHECK-LABEL: define nofpclass(inf) <2 x float> @vec_select_call_only_inf
+; CHECK-SAME: (<2 x i1> [[C:%.*]], <2 x float> [[Y:%.*]]) {
+; CHECK-NEXT:    [[V:%.*]] = call nofpclass(nan zero sub norm) <2 x float> @extern_vec()
+; CHECK-NEXT:    ret <2 x float> [[Y]]
+;
+  %v = call nofpclass(nan norm zero sub) <2 x float> @extern_vec()
+  %s = select <2 x i1> %c, <2 x float> %v, <2 x float> %y
+  ret <2 x float> %s
+}
+
+; Expect ret poison
+define nofpclass(all) <2 x float> @vec_nofpclass_all_passthrough(<2 x float> %x) {
+; CHECK-LABEL: define nofpclass(all) <2 x float> @vec_nofpclass_all_passthrough
+; CHECK-SAME: (<2 x float> [[X:%.*]]) {
+; CHECK-NEXT:    ret <2 x float> poison
+;
+  ret <2 x float> %x
+}
+
+; Expect call kept, ret poison
+define nofpclass(all) <2 x float> @vec_nofpclass_all_call(<2 x float> %x) {
+; CHECK-LABEL: define nofpclass(all) <2 x float> @vec_nofpclass_all_call
+; CHECK-SAME: (<2 x float> [[X:%.*]]) {
+; CHECK-NEXT:    [[Y:%.*]] = call <2 x float> @extern_vec_func(<2 x float> [[X]])
+; CHECK-NEXT:    ret <2 x float> poison
+;
+  %y = call <2 x float> @extern_vec_func(<2 x float> %x)
+  ret <2 x float> %y
+}
+
+; Should not fold this, should not assume payload/sign bits are canonical
+define nofpclass(snan) <2 x float> @vec_ret_nofpclass_snan__nofpclass_call_only_nan(<2 x i1> %cond, <2 x float> %y) {
+; CHECK-LABEL: define nofpclass(snan) <2 x float> @vec_ret_nofpclass_snan__nofpclass_call_only_nan
+; CHECK-SAME: (<2 x i1> [[COND:%.*]], <2 x float> [[Y:%.*]]) {
+; CHECK-NEXT:    [[MUST_BE_NAN:%.*]] = call nofpclass(inf zero sub norm) <2 x float> @extern_vec_func()
+; CHECK-NEXT:    ret <2 x float> [[MUST_BE_NAN]]
+;
+  %must.be.nan = call nofpclass(inf norm zero sub) <2 x float> @extern_vec_func()
+  ret <2 x float> %must.be.nan
+}
