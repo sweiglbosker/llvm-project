@@ -21828,11 +21828,36 @@ ResTy BoUpSLP::processBuildVector(const TreeEntry *E, Type *ScalarTy,
   auto *VecTy = getWidenedType(ScalarTy, GatheredScalars.size());
   unsigned NumParts =
       ::getNumberOfParts(*TTI, VecTy, ScalarTy, GatheredScalars.size());
+  auto HasSupportedExtractShuffleInputs =
+      [&](ArrayRef<int> CurrentExtractMask) -> bool {
+    if (NumParts != 1)
+      return true;
+    // Single-register extract shuffle detection supports at most 2 input vectors.
+    SmallPtrSet<Value *, 2> UniqueVecOps;
+    for (const auto [Idx, MaskIdx] : enumerate(CurrentExtractMask)) {
+      if (MaskIdx == PoisonMaskElem || isa<UndefValue>(StoredGS[Idx]))
+        continue;
+      auto *EI = dyn_cast<ExtractElementInst>(StoredGS[Idx]);
+      if (!EI)
+        continue;
+      Value *VecOp = EI->getVectorOperand();
+      if (ArrayRef<TreeEntry *> TEs = getTreeEntries(VecOp);
+          !TEs.empty() && TEs.front()->VectorizedValue)
+        VecOp = TEs.front()->VectorizedValue;
+      UniqueVecOps.insert(VecOp);
+      if (UniqueVecOps.size() > 2)
+        return false;
+    }
+    return true;
+  };
   if (!all_of(GatheredScalars, IsaPred<UndefValue>)) {
     // Check for gathered extracts.
     bool Resized = false;
     ExtractShuffles =
         tryToGatherExtractElements(GatheredScalars, ExtractMask, NumParts);
+    if (!ExtractShuffles.empty() &&
+        !HasSupportedExtractShuffleInputs(ExtractMask))
+      ExtractShuffles.clear();
     if (!ExtractShuffles.empty()) {
       SmallVector<const TreeEntry *> ExtractEntries;
       for (auto [Idx, I] : enumerate(ExtractMask)) {
